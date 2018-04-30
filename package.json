@@ -1,13 +1,13 @@
 {
   "name": "wp-install",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "description": "It's `npm install` for WordPress",
   "files": [
     "bin"
   ],
   "preferGlobal": true,
   "bin": {
-    "jg-package-2": "./bin/jg-package-2"
+    "wp-install": "./bin/wp-install"
   },
   "dependencies": {
     "fs-extra": "^5.0.0",
