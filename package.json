@@ -1,6 +1,6 @@
 {
   "name": "wp-install",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "It's `npm install` for WordPress",
   "files": [
     "bin"
