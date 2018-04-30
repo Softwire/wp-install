@@ -1,0 +1,185 @@
+#!/usr/bin/env node
+
+'use strict';
+
+const https = require('https');
+const fs = require('fs-extra');
+const request = require('request');
+const child_process = require('child_process');
+const _ = require('lodash');
+const yaml = require('js-yaml');
+
+var download = function(url, dest, cb) {
+  var file = fs.createWriteStream(dest);
+  var request = https.get(url, function(response) {
+    response.pipe(file);
+    file.on('finish', function() {
+      file.close(cb);  // close() is async, call cb after close completes.
+    });
+  }).on('error', function(err) { // Handle errors
+    fs.unlink(dest); // Delete the file async. (But we don't check the result)
+    console.log(err.message);
+  });
+};
+
+var get = function(url, cb) {
+  request(url, { json: true }, (err, res, body) => {
+    if (err) {
+      return console.log(err);
+    }
+    cb(body);
+  });
+}
+
+var makeDirIfNotExists = function(dir) {
+  fs.ensureDirSync(dir);
+}
+
+var deleteIfExists = function(file) {
+  child_process.execSync('rm -rf "' + file + '"');
+}
+
+var unzip = function(filename, destinationDirectory) {
+  console.log("unzipping file: " + filename + " to directory: " + destinationDirectory);
+  child_process.execSync('unzip "' + filename + '" -d "' + destinationDirectory + '"');
+}
+
+
+
+start();
+
+function start() {
+  cleanBuildFolder();
+  checkWordpressVersion();
+}
+
+function cleanBuildFolder() {
+  console.log("cleaning build folder");
+  deleteIfExists('./build');
+  makeDirIfNotExists("./build");
+  makeDirIfNotExists("./build/temp");
+}
+
+function checkWordpressVersion() {
+  console.log("checking wordpress version");
+  var wordpressVersionApiUrl = 'https://api.wordpress.org/core/version-check/1.7/';
+  get(wordpressVersionApiUrl, processWordpressApiResponse);
+}
+
+function processWordpressApiResponse(response) {
+  console.log("got wordpress version response");
+  var wordpressDownloadUrl =
+    _(response.offers)
+    .filter({response: 'upgrade'})
+    .head().download;
+
+  console.log("wordpress download url is: " + wordpressDownloadUrl);
+  downloadWordPress(wordpressDownloadUrl);
+}
+
+function downloadWordPress(wordpressDownloadUrl) {
+  console.log("downloading wordpress");
+  download(wordpressDownloadUrl, "./build/temp/wordpress.zip", unzipWordPress);
+}
+
+function unzipWordPress() {
+  console.log("unzipping wordpress");
+  unzip("./build/temp/wordpress.zip", "./build");
+  cleanWordPressDirectory();
+}
+
+function cleanWordPressDirectory() {
+  console.log("cleaning wordpress directory");
+  deleteIfExists('./build/wordpress/readme.html');
+  deleteIfExists('./build/wordpress/wp-content/themes/twentyfifteen');
+  deleteIfExists('./build/wordpress/wp-content/themes/twentysixteen');
+  deleteIfExists('./build/wordpress/wp-content/themes/twentyseventeen');
+  deleteIfExists('./build/wordpress/wp-content/plugins/akismet');
+  deleteIfExists('./build/wordpress/wp-content/plugins/hello.php');
+
+  downloadPlugins();
+  copyCustomTheme();
+}
+
+function downloadPlugins() {
+  console.log("downloading plugins");
+  var wpInstallConfigString = fs.readFileSync("./.wp-install.yml");
+  var wpInstallConfig = yaml.safeLoad(wpInstallConfigString);
+
+  if (wpInstallConfig && wpInstallConfig["plugins-to-download"] && wpInstallConfig["plugins-to-download"].plugins) {
+    _.forEach(wpInstallConfig["plugins-to-download"].plugins, function(plugin) {
+      console.log("downloading plugin: " + plugin.name);
+      downloadPlugin(plugin.name)
+    })
+  }
+
+  if (wpInstallConfig && wpInstallConfig["plugins-to-copy"] && wpInstallConfig["plugins-to-copy"].plugins) {
+    copyPlugins(wpInstallConfig["plugins-to-copy"]);
+  }
+}
+
+function downloadPlugin(pluginName) {
+  var wordpressPluginApiUrl = 'https://api.wordpress.org/plugins/info/1.0/' + pluginName + '.json';
+  console.log("Getting plugin " + pluginName + " from url: " + wordpressPluginApiUrl);
+  get(wordpressPluginApiUrl, function(response) {
+    processWordpressPluginApiResponse(pluginName, response)
+  });
+}
+
+function processWordpressPluginApiResponse(pluginName, response) {
+  console.log("got wordpress version response for plugin: " + pluginName);
+  var pluginDownloadUrl = response.download_link;
+  console.log("plugin download link for plugin: " + pluginName + " is: " + pluginDownloadUrl);
+  downloadPluginFromUrl(pluginName, pluginDownloadUrl);
+}
+
+function downloadPluginFromUrl(pluginName, pluginDownloadUrl) {
+  console.log("starting plugin download for plugin: " + pluginName);
+  download(pluginDownloadUrl, "./build/temp/plugin--" + pluginName + ".zip", function() {
+    unzipPlugin(pluginName);
+  });
+}
+
+function unzipPlugin(pluginName) {
+  console.log("unzipping plugin: " + pluginName);
+  unzip("./build/temp/plugin--" + pluginName + ".zip", './build/wordpress/wp-content/plugins/');
+}
+
+function copyPlugins(pluginsToCopyOptions) {
+  console.log("copying plugins from: ./" + pluginsToCopyOptions.directory);
+
+  _.forEach(pluginsToCopyOptions.plugins, function(plugin) {
+    switch(plugin.type) {
+      case 'directory':
+          copyPluginFolder(pluginsToCopyOptions.directory, plugin)
+          break;
+      case 'zip':
+          extractPluginZipFile(pluginsToCopyOptions.directory, plugin)
+          break;
+    }
+  })
+}
+
+function copyPluginFolder(directory, plugin) {
+  console.log("copying plugin: " + plugin.name);
+  child_process.execSync('cp -r "./' + directory + '/' + plugin.name + '" ./build/wordpress/wp-content/plugins');
+}
+
+function extractPluginZipFile(directory, plugin) {
+  console.log("unzipping plugin: " + plugin.name + " from file: " + plugin.filename);
+  unzip('./' + directory + '/' + plugin.filename, './build/wordpress/wp-content/plugins/');
+}
+
+function copyCustomTheme() {
+  console.log("copying custom theme");
+  var wpInstallConfigString = fs.readFileSync("./.wp-install.yml");
+  var wpInstallConfig = yaml.safeLoad(wpInstallConfigString);
+
+  if (wpInstallConfig && wpInstallConfig["custom-theme"] && wpInstallConfig["custom-theme"].directory) {
+    child_process.execSync('cp -r "./' + wpInstallConfig["custom-theme"].directory + '/" ./build/wordpress/wp-content/themes');
+  }
+}
+
+
+
+
