@@ -11,12 +11,12 @@ This goes against the modern idea of [Immutable Infrastructure](https://www.digi
 
 This package is here to help make immutable WordPress deployment easier!  
 This package:
-* Downloads the latest version of WordPress and puts it in a `./build` folder.
+* Downloads the latest version of WordPress and puts it in a `./dist` folder.
 * Downloads the latest version of the WordPress plugins that you configure in `.wp-install.yml`
 * Copies plugins that you have saved locally
 * Copies your custom theme that you have saved locally
 
-This ends up with a working WordPress installation in `./build/wordpress` that you can serve or deploy.
+This ends up with a working WordPress installation in `./dist/wordpress` that you can serve or deploy.
 
 ## Installation
 ```
@@ -54,21 +54,21 @@ wp-install
 ```
 
 ## What does it do? / what are the options?
-* Deletes and re-creates a `./build` folder.
+* Deletes and re-creates a `./dist` folder.
 
 * Downloads WordPress:
   * It checks the [WordPress.org API](https://codex.wordpress.org/WordPress.org_API) (specifically the [Version Checker](https://api.wordpress.org/core/version-check/1.7/)) to find which version of WordPress to download.  
   Note: it chooses the first `offer` with `response:"upgrade"`.
-  * Downloads the file to `./build/temp/wordpress.zip`
-  * Unzips WordPress into the `./build/wordpress` folder
+  * Downloads the file to `./dist/temp/wordpress.zip`
+  * Unzips WordPress into the `./dist/wordpress` folder
 
 * Plugins (part 1) - download plugins
   * Looks in `.wp-install.yml` to see if you want to download any plugins from WordPress.org  
   This is configured in the `plugins-to-download` section.
   * Checks the [WordPress.org API](https://codex.wordpress.org/WordPress.org_API) to find which version of the plugin to download.  
   For instance, for the `custom-post-type-ui` plugin, uses [this page on the API](https://api.wordpress.org/plugins/info/1.0/custom-post-type-ui.json)
-  * Downloads the plugin to `./build/temp/plugin--[plugin-name].zip`
-  * Unzips the plugin to `./build/wordpress/wp-content/plugins/`
+  * Downloads the plugin to `./dist/temp/plugin--[plugin-name].zip`
+  * Unzips the plugin to `./dist/wordpress/wp-content/plugins/`
 
 * Plugins (part 2) - locally saved plugins
   * Looks in `.wp-install.yml` to see if you have any locally saved plugins to copy
@@ -76,4 +76,4 @@ wp-install
 
 * Copies your custom theme
   * Looks in `.wp-install.yml` to see if you have a custom theme to copy
-  * The theme is copied to `./build/wordpress/wp-content/themes`
+  * The theme is copied to `./dist/wordpress/wp-content/themes`

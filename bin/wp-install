@@ -49,15 +49,15 @@ var unzip = function(filename, destinationDirectory) {
 start();
 
 function start() {
-  cleanBuildFolder();
+  cleanDistFolder();
   checkWordpressVersion();
 }
 
-function cleanBuildFolder() {
-  console.log("cleaning build folder");
-  deleteIfExists('./build');
-  makeDirIfNotExists("./build");
-  makeDirIfNotExists("./build/temp");
+function cleanDistFolder() {
+  console.log("cleaning dist folder");
+  deleteIfExists('./dist');
+  makeDirIfNotExists("./dist");
+  makeDirIfNotExists("./dist/temp");
 }
 
 function checkWordpressVersion() {
@@ -79,23 +79,23 @@ function processWordpressApiResponse(response) {
 
 function downloadWordPress(wordpressDownloadUrl) {
   console.log("downloading wordpress");
-  download(wordpressDownloadUrl, "./build/temp/wordpress.zip", unzipWordPress);
+  download(wordpressDownloadUrl, "./dist/temp/wordpress.zip", unzipWordPress);
 }
 
 function unzipWordPress() {
   console.log("unzipping wordpress");
-  unzip("./build/temp/wordpress.zip", "./build");
+  unzip("./dist/temp/wordpress.zip", "./dist");
   cleanWordPressDirectory();
 }
 
 function cleanWordPressDirectory() {
   console.log("cleaning wordpress directory");
-  deleteIfExists('./build/wordpress/readme.html');
-  deleteIfExists('./build/wordpress/wp-content/themes/twentyfifteen');
-  deleteIfExists('./build/wordpress/wp-content/themes/twentysixteen');
-  deleteIfExists('./build/wordpress/wp-content/themes/twentyseventeen');
-  deleteIfExists('./build/wordpress/wp-content/plugins/akismet');
-  deleteIfExists('./build/wordpress/wp-content/plugins/hello.php');
+  deleteIfExists('./dist/wordpress/readme.html');
+  deleteIfExists('./dist/wordpress/wp-content/themes/twentyfifteen');
+  deleteIfExists('./dist/wordpress/wp-content/themes/twentysixteen');
+  deleteIfExists('./dist/wordpress/wp-content/themes/twentyseventeen');
+  deleteIfExists('./dist/wordpress/wp-content/plugins/akismet');
+  deleteIfExists('./dist/wordpress/wp-content/plugins/hello.php');
 
   downloadPlugins();
   copyCustomTheme();
@@ -135,14 +135,14 @@ function processWordpressPluginApiResponse(pluginName, response) {
 
 function downloadPluginFromUrl(pluginName, pluginDownloadUrl) {
   console.log("starting plugin download for plugin: " + pluginName);
-  download(pluginDownloadUrl, "./build/temp/plugin--" + pluginName + ".zip", function() {
+  download(pluginDownloadUrl, "./dist/temp/plugin--" + pluginName + ".zip", function() {
     unzipPlugin(pluginName);
   });
 }
 
 function unzipPlugin(pluginName) {
   console.log("unzipping plugin: " + pluginName);
-  unzip("./build/temp/plugin--" + pluginName + ".zip", './build/wordpress/wp-content/plugins/');
+  unzip("./dist/temp/plugin--" + pluginName + ".zip", './dist/wordpress/wp-content/plugins/');
 }
 
 function copyPlugins(pluginsToCopyOptions) {
@@ -162,12 +162,12 @@ function copyPlugins(pluginsToCopyOptions) {
 
 function copyPluginFolder(directory, plugin) {
   console.log("copying plugin: " + plugin.name);
-  child_process.execSync('cp -r "./' + directory + '/' + plugin.name + '" ./build/wordpress/wp-content/plugins');
+  child_process.execSync('cp -r "./' + directory + '/' + plugin.name + '" ./dist/wordpress/wp-content/plugins');
 }
 
 function extractPluginZipFile(directory, plugin) {
   console.log("unzipping plugin: " + plugin.name + " from file: " + plugin.filename);
-  unzip('./' + directory + '/' + plugin.filename, './build/wordpress/wp-content/plugins/');
+  unzip('./' + directory + '/' + plugin.filename, './dist/wordpress/wp-content/plugins/');
 }
 
 function copyCustomTheme() {
@@ -176,7 +176,7 @@ function copyCustomTheme() {
   var wpInstallConfig = yaml.safeLoad(wpInstallConfigString);
 
   if (wpInstallConfig && wpInstallConfig["custom-theme"] && wpInstallConfig["custom-theme"].directory) {
-    child_process.execSync('cp -r "./' + wpInstallConfig["custom-theme"].directory + '/" ./build/wordpress/wp-content/themes');
+    child_process.execSync('cp -r "./' + wpInstallConfig["custom-theme"].directory + '/" ./dist/wordpress/wp-content/themes');
   }
 }
 
