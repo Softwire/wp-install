@@ -9,25 +9,29 @@ const child_process = require('child_process');
 const _ = require('lodash');
 const yaml = require('js-yaml');
 
-var download = function(url, dest, cb) {
-  var file = fs.createWriteStream(dest);
-  var request = https.get(url, function(response) {
-    response.pipe(file);
-    file.on('finish', function() {
-      file.close(cb);  // close() is async, call cb after close completes.
+var download = function(url, dest) {
+  return new Promise(resolve => {
+    var file = fs.createWriteStream(dest);
+    var request = https.get(url, function(response) {
+      response.pipe(file);
+      file.on('finish', function() {
+        file.close(resolve);  // close() is async, call resolve after close completes.
+      });
+    }).on('error', function(err) { // Handle errors
+      fs.unlink(dest); // Delete the file async. (But we don't check the result)
+      console.log(err.message);
     });
-  }).on('error', function(err) { // Handle errors
-    fs.unlink(dest); // Delete the file async. (But we don't check the result)
-    console.log(err.message);
   });
 };
 
-var get = function(url, cb) {
-  request(url, { json: true }, (err, res, body) => {
-    if (err) {
-      return console.log(err);
-    }
-    cb(body);
+var get = function(url) {
+  return new Promise(resolve => {
+    request(url, { json: true }, (err, res, body) => {
+      if (err) {
+        return console.log(err);
+      }
+      resolve(body);
+    });
   });
 }
 
@@ -40,146 +44,280 @@ var deleteIfExists = function(file) {
 }
 
 var unzip = function(filename, destinationDirectory) {
-  console.log("unzipping file: " + filename + " to directory: " + destinationDirectory);
+  console.log('- unzipping file: [' + filename + '] to directory: [' + destinationDirectory + ']');
   child_process.execSync('unzip "' + filename + '" -d "' + destinationDirectory + '"');
+}
+
+var copyFolder = function(sourceFolder, destinationFolder) {
+  console.log('- copying folder from [' + sourceFolder + '] to [' + destinationFolder + ']');
+  child_process.execSync('cp -r "' + sourceFolder + '" "' + destinationFolder + '"');
 }
 
 
 
 start();
 
-function start() {
-  cleanDistFolder();
-  checkWordpressVersion();
+async function start() {
+  console.log('------------------------');
+  console.log('-----  wp-install  -----');
+  console.log('------------------------');
+  console.log(''); // make some space in the log
+  
+  const config = readAndValidateConfigFile();
+  cleanFolders(config);
+  await downloadWordPress(config);
+  createWordPressContentFolders(config);
+  await downloadPlugins(config);
+  await copyPlugins(config);
+  await copyCustomTheme(config);
 }
 
-function cleanDistFolder() {
-  console.log("cleaning dist folder");
-  deleteIfExists('./dist');
-  makeDirIfNotExists("./dist");
-  makeDirIfNotExists("./dist/temp");
+
+///////////
+// CONFIG
+
+function readAndValidateConfigFile() {
+  const configFilename = './.wp-install.yml';
+  console.log('reading config file [' + configFilename + ']');
+
+  var wpInstallConfigString = fs.readFileSync(configFilename);
+  var wpInstallConfig = yaml.safeLoad(wpInstallConfigString);
+
+  validateConfigFile(wpInstallConfig);
+
+  return wpInstallConfig;
 }
 
-function checkWordpressVersion() {
-  console.log("checking wordpress version");
-  var wordpressVersionApiUrl = 'https://api.wordpress.org/core/version-check/1.7/';
-  get(wordpressVersionApiUrl, processWordpressApiResponse);
+function validateConfigFile(config) {
+  if (!config['cache-folder']) {
+    config['cache-folder'] = './.wordpress-download-cache';
+  }
+
+  if (!config['dist-folder']) {
+    config['dist-folder'] = './dist';
+  }
 }
 
-function processWordpressApiResponse(response) {
-  console.log("got wordpress version response");
-  var wordpressDownloadUrl =
+
+//////////
+// CLEAN
+
+function cleanFolders(config) {
+  console.log('cleaning folders');
+  console.log('- cleaning dist folder');
+  deleteIfExists(config['dist-folder']);
+  makeDirIfNotExists(config['dist-folder']);
+
+  console.log('- creating cache folder (if necessary) ');
+  makeDirIfNotExists(config['cache-folder']);
+  makeDirIfNotExists(config['cache-folder'] + '/wordpress');
+  makeDirIfNotExists(config['cache-folder'] + '/plugins');
+}
+
+
+///////////////////
+// WORDPRESS CORE
+
+async function downloadWordPress(config) {
+  console.log(''); // make some space in the log
+  console.log('------------------------');
+  console.log('downloading WordPress');
+  console.log(''); // make some space in the log
+
+  const latestVersion = await checkLatestWordPressVersion();
+  await downloadAndExtractWordPressIfStale(config, latestVersion);
+  copyWordPressFromCacheToDistFolder(config, latestVersion);
+}
+
+async function checkLatestWordPressVersion() {
+  console.log('- finding the latest version of WordPress');
+  var wordPressVersionApiUrl = 'https://api.wordpress.org/core/version-check/1.7/';
+  console.log('  - checking [' + wordPressVersionApiUrl + ']');
+  const response = await get(wordPressVersionApiUrl);
+
+  console.log('  - got wordpress version response');
+  var wordPressLatestVersionData =
     _(response.offers)
     .filter({response: 'upgrade'})
-    .head().download;
+    .head();
 
-  console.log("wordpress download url is: " + wordpressDownloadUrl);
-  downloadWordPress(wordpressDownloadUrl);
+  console.log('  - latest wordpress version is [' + wordPressLatestVersionData.version + ']');
+  return wordPressLatestVersionData;
 }
 
-function downloadWordPress(wordpressDownloadUrl) {
-  console.log("downloading wordpress");
-  download(wordpressDownloadUrl, "./dist/temp/wordpress.zip", unzipWordPress);
-}
+async function downloadAndExtractWordPressIfStale(config, latestVersion) {
+  console.log('downloading / extracting WordPress (if stale)');
+  const versionedPath = config['cache-folder'] + '/wordpress/' + latestVersion.version + '/';
 
-function unzipWordPress() {
-  console.log("unzipping wordpress");
-  unzip("./dist/temp/wordpress.zip", "./dist");
-  cleanWordPressDirectory();
-}
+  console.log('- checking if WordPress is stale - checking if folder [' + versionedPath + '] exists');
+  if (!fs.existsSync(versionedPath)) {
+    // Path doesn't exist - download and extract wordpress here
+    console.log('  - WordPress is stale - downloading');
 
-function cleanWordPressDirectory() {
-  console.log("cleaning wordpress directory");
-  deleteIfExists('./dist/wordpress/readme.html');
-  deleteIfExists('./dist/wordpress/wp-content/themes/twentyfifteen');
-  deleteIfExists('./dist/wordpress/wp-content/themes/twentysixteen');
-  deleteIfExists('./dist/wordpress/wp-content/themes/twentyseventeen');
-  deleteIfExists('./dist/wordpress/wp-content/plugins/akismet');
-  deleteIfExists('./dist/wordpress/wp-content/plugins/hello.php');
+    const downloadUrl = latestVersion.packages.no_content;
+    const downloadFile = config['cache-folder'] + '/wordpress/' + latestVersion.version + '.zip';
+    console.log('  - downloading [' + downloadUrl + '] to [' + downloadFile + ']');
+    await download(downloadUrl, downloadFile);
+    console.log('  - download complete');
 
-  downloadPlugins();
-  copyCustomTheme();
-}
+    console.log('  - extracting [' + downloadFile + '] to [' + versionedPath + ']');
+    unzip(downloadFile, versionedPath);
 
-function downloadPlugins() {
-  console.log("downloading plugins");
-  var wpInstallConfigString = fs.readFileSync("./.wp-install.yml");
-  var wpInstallConfig = yaml.safeLoad(wpInstallConfigString);
-
-  if (wpInstallConfig && wpInstallConfig["plugins-to-download"] && wpInstallConfig["plugins-to-download"].plugins) {
-    _.forEach(wpInstallConfig["plugins-to-download"].plugins, function(plugin) {
-      console.log("downloading plugin: " + plugin.name);
-      downloadPlugin(plugin.name)
-    })
-  }
-
-  if (wpInstallConfig && wpInstallConfig["plugins-to-copy"] && wpInstallConfig["plugins-to-copy"].plugins) {
-    copyPlugins(wpInstallConfig["plugins-to-copy"]);
+  } else {
+    console.log('  - WordPress is recent - nothing to download');
   }
 }
 
-function downloadPlugin(pluginName) {
-  var wordpressPluginApiUrl = 'https://api.wordpress.org/plugins/info/1.0/' + pluginName + '.json';
-  console.log("Getting plugin " + pluginName + " from url: " + wordpressPluginApiUrl);
-  get(wordpressPluginApiUrl, function(response) {
-    processWordpressPluginApiResponse(pluginName, response)
-  });
+function copyWordPressFromCacheToDistFolder(config, latestVersion) {
+  console.log('copying WordPress from cache to dist folder');
+  const versionedPath = config['cache-folder'] + '/wordpress/' + latestVersion.version + '/wordpress';
+  copyFolder(versionedPath, config['dist-folder'] + '/wordpress/')
 }
 
-function processWordpressPluginApiResponse(pluginName, response) {
-  console.log("got wordpress version response for plugin: " + pluginName);
-  var pluginDownloadUrl = response.download_link;
-  console.log("plugin download link for plugin: " + pluginName + " is: " + pluginDownloadUrl);
-  downloadPluginFromUrl(pluginName, pluginDownloadUrl);
+
+//////////////////////////////////////////////////
+// PREPARE CONTENT FOLDER (FOR PLUGINS & THEMES)
+
+function createWordPressContentFolders(config) {
+  console.log('creating WordPress content folders');
+  makeDirIfNotExists(config['dist-folder'] + '/wordpress/wp-content');
+  makeDirIfNotExists(config['dist-folder'] + '/wordpress/wp-content/plugins');
+  makeDirIfNotExists(config['dist-folder'] + '/wordpress/wp-content/themes');
 }
 
-function downloadPluginFromUrl(pluginName, pluginDownloadUrl) {
-  console.log("starting plugin download for plugin: " + pluginName);
-  download(pluginDownloadUrl, "./dist/temp/plugin--" + pluginName + ".zip", function() {
-    unzipPlugin(pluginName);
-  });
-}
 
-function unzipPlugin(pluginName) {
-  console.log("unzipping plugin: " + pluginName);
-  unzip("./dist/temp/plugin--" + pluginName + ".zip", './dist/wordpress/wp-content/plugins/');
-}
+///////////////////////
+// PLUGINS (DOWNLOAD)
 
-function copyPlugins(pluginsToCopyOptions) {
-  console.log("copying plugins from: ./" + pluginsToCopyOptions.directory);
-
-  _.forEach(pluginsToCopyOptions.plugins, function(plugin) {
-    switch(plugin.type) {
-      case 'directory':
-          copyPluginFolder(pluginsToCopyOptions.directory, plugin)
-          break;
-      case 'zip':
-          extractPluginZipFile(pluginsToCopyOptions.directory, plugin)
-          break;
+async function downloadPlugins(config) {
+  console.log(''); // make some space in the log
+  console.log('------------------------');
+  console.log('downloading plugins');
+  if (config['plugins-to-download'] && config['plugins-to-download'].plugins) {
+    const plugins = config['plugins-to-download'].plugins;
+    for (var i = 0; i < plugins.length; i++) {
+      var plugin = plugins[i];
+      await downloadPlugin(config, plugin.name)
     }
-  })
-}
-
-function copyPluginFolder(directory, plugin) {
-  console.log("copying plugin: " + plugin.name);
-  child_process.execSync('cp -r "./' + directory + '/' + plugin.name + '" ./dist/wordpress/wp-content/plugins');
-}
-
-function extractPluginZipFile(directory, plugin) {
-  console.log("unzipping plugin: " + plugin.name + " from file: " + plugin.filename);
-  unzip('./' + directory + '/' + plugin.filename, './dist/wordpress/wp-content/plugins/');
-}
-
-function copyCustomTheme() {
-  console.log("copying custom theme");
-  var wpInstallConfigString = fs.readFileSync("./.wp-install.yml");
-  var wpInstallConfig = yaml.safeLoad(wpInstallConfigString);
-
-  if (wpInstallConfig && wpInstallConfig["custom-theme"] && wpInstallConfig["custom-theme"].directory) {
-    child_process.execSync('cp -r "./' + wpInstallConfig["custom-theme"].directory + '/" ./dist/wordpress/wp-content/themes');
   }
 }
 
 
+async function downloadPlugin(config, pluginName) {
+  console.log(''); // make some space in the log
+  console.log('downloading plugin: ' + pluginName);
+  const latestVersion = await checkLatestPluginVersion(pluginName);
+  await downloadAndExtractPluginIfStale(config, pluginName, latestVersion);
+  copyPluginFromCacheToDistFolder(config, pluginName, latestVersion);
+}
 
+async function checkLatestPluginVersion(pluginName) {
+  console.log('- finding the latest version of plugin: ' + pluginName);
+  var pluginApiUrl = 'https://api.wordpress.org/plugins/info/1.0/' + pluginName + '.json';
+  console.log('  - checking [' + pluginApiUrl + ']');
+  const response = await get(pluginApiUrl);
+
+  console.log('  - got plugin version response');
+  var pluginLatestVersionData = response;
+
+  console.log('  - latest version of plugin [' + pluginName + '] is [' + pluginLatestVersionData.version + ']');
+  return pluginLatestVersionData;
+}
+
+async function downloadAndExtractPluginIfStale(config, pluginName, latestVersion) {
+  console.log('downloading / extracting plugin (if stale)');
+
+  const pluginPath = config['cache-folder'] + '/plugins/' + pluginName;
+  console.log('- creating cache folder (if necessary) [' + pluginPath + ']');
+  makeDirIfNotExists(pluginPath);
+
+  const versionedPath = pluginPath + '/' + latestVersion.version;
+  console.log('- checking if plugin is stale - checking if folder [' + versionedPath + '] exists');
+  if (!fs.existsSync(versionedPath)) {
+    // Path doesn't exist - download and extract plugin here
+    console.log('  - plugin is stale - downloading');
+
+    const downloadUrl = latestVersion.download_link;
+    const downloadFile = pluginPath + '/' + latestVersion.version + '.zip';
+    console.log('  - downloading [' + downloadUrl + '] to [' + downloadFile + ']');
+    await download(downloadUrl, downloadFile);
+    console.log('  - download complete');
+
+    console.log('  - extracting [' + downloadFile + '] to [' + versionedPath + ']');
+    unzip(downloadFile, versionedPath);
+
+  } else {
+    console.log('  - plugin is recent - nothing to download');
+  }
+}
+
+function copyPluginFromCacheToDistFolder(config, pluginName, latestVersion) {
+  console.log('copying plugin [' + pluginName + '] from cache to dist folder');
+  const versionedPath = config['cache-folder'] + '/plugins/' + pluginName + '/' + latestVersion.version + '/' + pluginName;
+  const destinationFolder = config['dist-folder'] + '/wordpress/wp-content/plugins/';
+  copyFolder(versionedPath, destinationFolder);
+}
+
+
+///////////////////
+// PLUGINS (COPY)
+
+async function copyPlugins(config) {
+  console.log(''); // make some space in the log
+  console.log('------------------------');
+  console.log('copying plugins');
+
+  if (config['plugins-to-copy'] && config['plugins-to-copy'].plugins) {
+    const plugins = config['plugins-to-copy'].plugins;
+    for (var i = 0; i < plugins.length; i++) {
+      var plugin = plugins[i];
+      await copyPlugin(config, plugin);
+    }
+  }
+}
+
+function copyPlugin(config, plugin) {
+  console.log(''); // make some space in the log
+  console.log('copying plugin: ' + plugin.name);
+
+  switch(plugin.type) {
+    case 'directory':
+      console.log('- plugin is a directory');
+      copyPluginFolder(config, plugin);
+      break;
+    case 'zip':
+      console.log('- plugin is a zip file');
+      extractPluginZipFile(config, plugin);
+      break;
+  }
+}
+
+function copyPluginFolder(config, plugin) {
+  const sourceFolder = config['plugins-to-copy'].directory + '/' + plugin.directory;
+  const destinationFolder = config['dist-folder'] + '/wordpress/wp-content/plugins';
+  copyFolder(sourceFolder, destinationFolder);
+}
+
+function extractPluginZipFile(config, plugin) {
+  const sourceFile = config['plugins-to-copy'].directory + '/' + plugin.filename;
+  const destinationFolder = config['dist-folder'] + '/wordpress/wp-content/plugins';
+  unzip(sourceFile, destinationFolder);
+}
+
+
+/////////////////
+// CUSTOM THEME
+
+function copyCustomTheme(config) {
+  console.log(''); // make some space in the log
+  console.log('------------------------');
+  console.log('copying custom theme');
+  console.log(''); // make some space in the log
+
+  if (config['custom-theme'] && config['custom-theme'].directory) {
+    const sourceFolder = config['custom-theme'].directory;
+    const destinationFolder = config['dist-folder'] + '/wordpress/wp-content/themes';
+    copyFolder(sourceFolder, destinationFolder);
+  }
+}
 
