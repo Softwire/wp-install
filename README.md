@@ -29,12 +29,15 @@ This will install wp-install globally so it can be run from the command line.
 The structure should be like this:
 ```yaml
 ---
-plugins-to-download:
+cache-folder: .wordpress-download-cache  # Optional - this is the default value
+dist-folder: dist  # Optional - this is the default value
+
+plugins-to-download:  # Optional
   plugins:
   - name: custom-post-type-ui
   - name: custom-post-type-permalinks
 
-plugins-to-copy:
+plugins-to-copy:  # Optional
   directory: plugins-to-copy
   plugins:
   - name: advanced-custom-fields-pro
@@ -44,7 +47,7 @@ plugins-to-copy:
     type: zip
     filename: advanced-custom-fields-pro-2.zip
 
-custom-theme:
+custom-theme:  # Optional
   directory: my-custom-theme
 ```
 
@@ -59,7 +62,7 @@ wp-install
 * Downloads WordPress:
   * It checks the [WordPress.org API](https://codex.wordpress.org/WordPress.org_API) (specifically the [Version Checker](https://api.wordpress.org/core/version-check/1.7/)) to find which version of WordPress to download.  
   Note: it chooses the first `offer` with `response:"upgrade"`.
-  * Downloads the file to `./dist/temp/wordpress.zip`
+  * Downloads the file to `.wordpress-download-cache/wordpress/[version]`
   * Unzips WordPress into the `./dist/wordpress` folder
 
 * Plugins (part 1) - download plugins
@@ -67,7 +70,7 @@ wp-install
   This is configured in the `plugins-to-download` section.
   * Checks the [WordPress.org API](https://codex.wordpress.org/WordPress.org_API) to find which version of the plugin to download.  
   For instance, for the `custom-post-type-ui` plugin, uses [this page on the API](https://api.wordpress.org/plugins/info/1.0/custom-post-type-ui.json)
-  * Downloads the plugin to `./dist/temp/plugin--[plugin-name].zip`
+  * Downloads the plugin to `.wordpress-download-cache/plugins/[plugin-name]`
   * Unzips the plugin to `./dist/wordpress/wp-content/plugins/`
 
 * Plugins (part 2) - locally saved plugins
