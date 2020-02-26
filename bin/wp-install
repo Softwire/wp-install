@@ -6,13 +6,13 @@ const https = require('https');
 const fs = require('fs-extra');
 const request = require('request');
 const child_process = require('child_process');
-const _ = require('lodash');
 const yaml = require('js-yaml');
+const path = require('path');
 
 var download = function(url, dest) {
   return new Promise((resolve, reject) => {
     var file = fs.createWriteStream(dest);
-    var request = https.get(url, function(response) {
+    https.get(url, function(response) {
       response.pipe(file);
       file.on('finish', function() {
         file.close(resolve);  // close() is async, call resolve after close completes.
@@ -40,8 +40,17 @@ var makeDirIfNotExists = function(dir) {
   fs.ensureDirSync(dir);
 }
 
-var deleteIfExists = function(file) {
-  child_process.execSync('rm -rf "' + file + '"');
+async function cleanDistFolder(dir) {
+  const files = await fs.readdir(dir);
+  for (const file of files) {
+    const filePath = path.join(dir, file);
+    // Leave the wordpress directory, but delete its contents
+    if (file === "wordpress") {
+      await fs.emptyDir(filePath);
+    } else {
+      await fs.remove(filePath);
+    }
+  }
 }
 
 var unzip = function(filename, destinationDirectory) {
@@ -64,13 +73,19 @@ async function start() {
   console.log('------------------------');
   console.log(''); // make some space in the log
 
-  const config = readAndValidateConfigFile();
-  cleanFolders(config);
-  await downloadWordPress(config);
-  createWordPressContentFolders(config);
-  await downloadPlugins(config);
-  await copyPlugins(config);
-  await copyCustomTheme(config);
+  try {
+    const config = readAndValidateConfigFile();
+    await cleanFolders(config);
+    await downloadWordPress(config);
+    createWordPressContentFolders(config);
+    await downloadPlugins(config);
+    await copyPlugins(config);
+    await copyCustomTheme(config);
+  } catch (e) {
+    console.log(''); // make some space in the log
+    console.error(e);
+    console.log('Script failed: ' + e.message);
+  }
 }
 
 
@@ -103,11 +118,12 @@ function validateConfigFile(config) {
 //////////
 // CLEAN
 
-function cleanFolders(config) {
+async function cleanFolders(config) {
   console.log('cleaning folders');
   console.log('- cleaning dist folder');
-  deleteIfExists(config['dist-folder']);
   makeDirIfNotExists(config['dist-folder']);
+  makeDirIfNotExists(path.join(config['dist-folder'], 'wordpress'));
+  await cleanDistFolder(config['dist-folder']);
 
   console.log('- creating cache folder (if necessary) ');
   makeDirIfNotExists(config['cache-folder']);
@@ -137,11 +153,8 @@ async function checkLatestWordPressVersion() {
   const response = await get(wordPressVersionApiUrl);
 
   console.log('  - got wordpress version response');
-  var wordPressLatestVersionData =
-    _(response.offers)
-      .filter({ response: 'upgrade' })
-      .head();
 
+  var wordPressLatestVersionData = response.offers.find(offer => offer.response === 'upgrade');
   console.log('  - latest wordpress version is [' + wordPressLatestVersionData.version + ']');
   return wordPressLatestVersionData;
 }
@@ -171,7 +184,7 @@ async function downloadAndExtractWordPressIfStale(config, latestVersion) {
 
 function copyWordPressFromCacheToDistFolder(config, latestVersion) {
   console.log('copying WordPress from cache to dist folder');
-  const versionedPath = config['cache-folder'] + '/wordpress/' + latestVersion.version + '/wordpress';
+  const versionedPath = config['cache-folder'] + '/wordpress/' + latestVersion.version + '/wordpress/.';
   copyFolder(versionedPath, config['dist-folder'] + '/wordpress/')
 }
 
