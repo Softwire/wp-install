@@ -10,7 +10,7 @@ const _ = require('lodash');
 const yaml = require('js-yaml');
 
 var download = function(url, dest) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     var file = fs.createWriteStream(dest);
     var request = https.get(url, function(response) {
       response.pipe(file);
@@ -20,6 +20,7 @@ var download = function(url, dest) {
     }).on('error', function(err) { // Handle errors
       fs.unlink(dest); // Delete the file async. (But we don't check the result)
       console.log(err.message);
+      reject(err);
     });
   });
 };
@@ -62,7 +63,7 @@ async function start() {
   console.log('-----  wp-install  -----');
   console.log('------------------------');
   console.log(''); // make some space in the log
-  
+
   const config = readAndValidateConfigFile();
   cleanFolders(config);
   await downloadWordPress(config);
@@ -138,8 +139,8 @@ async function checkLatestWordPressVersion() {
   console.log('  - got wordpress version response');
   var wordPressLatestVersionData =
     _(response.offers)
-    .filter({response: 'upgrade'})
-    .head();
+      .filter({ response: 'upgrade' })
+      .head();
 
   console.log('  - latest wordpress version is [' + wordPressLatestVersionData.version + ']');
   return wordPressLatestVersionData;
@@ -280,7 +281,7 @@ function copyPlugin(config, plugin) {
   console.log(''); // make some space in the log
   console.log('copying plugin: ' + plugin.name);
 
-  switch(plugin.type) {
+  switch (plugin.type) {
     case 'directory':
       console.log('- plugin is a directory');
       copyPluginFolder(config, plugin);
