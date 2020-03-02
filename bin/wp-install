@@ -6,13 +6,13 @@ const https = require('https');
 const fs = require('fs-extra');
 const request = require('request');
 const child_process = require('child_process');
-const _ = require('lodash');
 const yaml = require('js-yaml');
+const path = require('path');
 
 var download = function(url, dest) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     var file = fs.createWriteStream(dest);
-    var request = https.get(url, function(response) {
+    https.get(url, function(response) {
       response.pipe(file);
       file.on('finish', function() {
         file.close(resolve);  // close() is async, call resolve after close completes.
@@ -20,6 +20,7 @@ var download = function(url, dest) {
     }).on('error', function(err) { // Handle errors
       fs.unlink(dest); // Delete the file async. (But we don't check the result)
       console.log(err.message);
+      reject(err);
     });
   });
 };
@@ -39,8 +40,17 @@ var makeDirIfNotExists = function(dir) {
   fs.ensureDirSync(dir);
 }
 
-var deleteIfExists = function(file) {
-  child_process.execSync('rm -rf "' + file + '"');
+async function cleanDistFolder(dir) {
+  const files = await fs.readdir(dir);
+  for (const file of files) {
+    const filePath = path.join(dir, file);
+    // Leave the wordpress directory, but delete its contents
+    if (file === "wordpress") {
+      await fs.emptyDir(filePath);
+    } else {
+      await fs.remove(filePath);
+    }
+  }
 }
 
 var unzip = function(filename, destinationDirectory) {
@@ -62,14 +72,20 @@ async function start() {
   console.log('-----  wp-install  -----');
   console.log('------------------------');
   console.log(''); // make some space in the log
-  
-  const config = readAndValidateConfigFile();
-  cleanFolders(config);
-  await downloadWordPress(config);
-  createWordPressContentFolders(config);
-  await downloadPlugins(config);
-  await copyPlugins(config);
-  await copyCustomTheme(config);
+
+  try {
+    const config = readAndValidateConfigFile();
+    await cleanFolders(config);
+    await downloadWordPress(config);
+    createWordPressContentFolders(config);
+    await downloadPlugins(config);
+    await copyPlugins(config);
+    await copyCustomTheme(config);
+  } catch (e) {
+    console.log(''); // make some space in the log
+    console.error(e);
+    console.log('Script failed: ' + e.message);
+  }
 }
 
 
@@ -102,11 +118,12 @@ function validateConfigFile(config) {
 //////////
 // CLEAN
 
-function cleanFolders(config) {
+async function cleanFolders(config) {
   console.log('cleaning folders');
   console.log('- cleaning dist folder');
-  deleteIfExists(config['dist-folder']);
   makeDirIfNotExists(config['dist-folder']);
+  makeDirIfNotExists(path.join(config['dist-folder'], 'wordpress'));
+  await cleanDistFolder(config['dist-folder']);
 
   console.log('- creating cache folder (if necessary) ');
   makeDirIfNotExists(config['cache-folder']);
@@ -136,11 +153,8 @@ async function checkLatestWordPressVersion() {
   const response = await get(wordPressVersionApiUrl);
 
   console.log('  - got wordpress version response');
-  var wordPressLatestVersionData =
-    _(response.offers)
-    .filter({response: 'upgrade'})
-    .head();
 
+  var wordPressLatestVersionData = response.offers.find(offer => offer.response === 'upgrade');
   console.log('  - latest wordpress version is [' + wordPressLatestVersionData.version + ']');
   return wordPressLatestVersionData;
 }
@@ -170,7 +184,7 @@ async function downloadAndExtractWordPressIfStale(config, latestVersion) {
 
 function copyWordPressFromCacheToDistFolder(config, latestVersion) {
   console.log('copying WordPress from cache to dist folder');
-  const versionedPath = config['cache-folder'] + '/wordpress/' + latestVersion.version + '/wordpress';
+  const versionedPath = config['cache-folder'] + '/wordpress/' + latestVersion.version + '/wordpress/.';
   copyFolder(versionedPath, config['dist-folder'] + '/wordpress/')
 }
 
@@ -195,13 +209,9 @@ async function downloadPlugins(config) {
   console.log('downloading plugins');
   if (config['plugins-to-download'] && config['plugins-to-download'].plugins) {
     const plugins = config['plugins-to-download'].plugins;
-    for (var i = 0; i < plugins.length; i++) {
-      var plugin = plugins[i];
-      await downloadPlugin(config, plugin.name)
-    }
+    await Promise.all(plugins.map(p => downloadPlugin(config, p.name)));
   }
 }
-
 
 async function downloadPlugin(config, pluginName) {
   console.log(''); // make some space in the log
@@ -212,47 +222,47 @@ async function downloadPlugin(config, pluginName) {
 }
 
 async function checkLatestPluginVersion(pluginName) {
-  console.log('- finding the latest version of plugin: ' + pluginName);
+  console.log('[' + pluginName + '] - finding the latest version of plugin');
   var pluginApiUrl = 'https://api.wordpress.org/plugins/info/1.0/' + pluginName + '.json';
-  console.log('  - checking [' + pluginApiUrl + ']');
+  console.log('[' + pluginName + '] - checking [' + pluginApiUrl + ']');
   const response = await get(pluginApiUrl);
 
-  console.log('  - got plugin version response');
+  console.log('[' + pluginName + '] -  got plugin version response');
   var pluginLatestVersionData = response;
 
-  console.log('  - latest version of plugin [' + pluginName + '] is [' + pluginLatestVersionData.version + ']');
+  console.log('[' + pluginName + '] -  latest version of plugin [' + pluginName + '] is [' + pluginLatestVersionData.version + ']');
   return pluginLatestVersionData;
 }
 
 async function downloadAndExtractPluginIfStale(config, pluginName, latestVersion) {
-  console.log('downloading / extracting plugin (if stale)');
+  console.log('[' + pluginName + '] downloading / extracting plugin (if stale)');
 
   const pluginPath = config['cache-folder'] + '/plugins/' + pluginName;
-  console.log('- creating cache folder (if necessary) [' + pluginPath + ']');
+  console.log('[' + pluginName + '] - creating cache folder (if necessary) [' + pluginPath + ']');
   makeDirIfNotExists(pluginPath);
 
   const versionedPath = pluginPath + '/' + latestVersion.version;
-  console.log('- checking if plugin is stale - checking if folder [' + versionedPath + '] exists');
+  console.log('[' + pluginName + '] - checking if plugin is stale - checking if folder [' + versionedPath + '] exists');
   if (!fs.existsSync(versionedPath)) {
     // Path doesn't exist - download and extract plugin here
-    console.log('  - plugin is stale - downloading');
+    console.log('[' + pluginName + ']  - plugin is stale - downloading');
 
     const downloadUrl = latestVersion.download_link;
     const downloadFile = pluginPath + '/' + latestVersion.version + '.zip';
-    console.log('  - downloading [' + downloadUrl + '] to [' + downloadFile + ']');
+    console.log('[' + pluginName + ']  - downloading [' + downloadUrl + '] to [' + downloadFile + ']');
     await download(downloadUrl, downloadFile);
-    console.log('  - download complete');
+    console.log('[' + pluginName + ']  - download complete');
 
-    console.log('  - extracting [' + downloadFile + '] to [' + versionedPath + ']');
+    console.log('[' + pluginName + ']  - extracting [' + downloadFile + '] to [' + versionedPath + ']');
     unzip(downloadFile, versionedPath);
 
   } else {
-    console.log('  - plugin is recent - nothing to download');
+    console.log('[' + pluginName + ']  - plugin is recent - nothing to download');
   }
 }
 
 function copyPluginFromCacheToDistFolder(config, pluginName, latestVersion) {
-  console.log('copying plugin [' + pluginName + '] from cache to dist folder');
+  console.log('[' + pluginName + '] copying plugin from cache to dist folder');
   const versionedPath = config['cache-folder'] + '/plugins/' + pluginName + '/' + latestVersion.version + '/' + pluginName;
   const destinationFolder = config['dist-folder'] + '/wordpress/wp-content/plugins/';
   copyFolder(versionedPath, destinationFolder);
@@ -280,7 +290,7 @@ function copyPlugin(config, plugin) {
   console.log(''); // make some space in the log
   console.log('copying plugin: ' + plugin.name);
 
-  switch(plugin.type) {
+  switch (plugin.type) {
     case 'directory':
       console.log('- plugin is a directory');
       copyPluginFolder(config, plugin);
